@@ -1,0 +1,427 @@
+================================================================================
+STOCK ANALYSER — TEST SUITE DESCRIPTIONS
+================================================================================
+67 tests total | test_tools.py hits live APIs; all other tests are fully mocked
+Run with: python3 -m pytest tests/ -v
+================================================================================
+
+
+────────────────────────────────────────────────────────────────────────────────
+FILE: tests/test_graph.py  (10 tests)
+────────────────────────────────────────────────────────────────────────────────
+Tests pure helper functions and routing logic exported from graph.py.
+No graph is built or executed. _route_after_planner tests use no mocks;
+_resolve_ticker tests call the live yfinance API.
+
+--- _route_after_planner ---
+
+test_route_out_of_scope_goes_to_responder
+  Builds a QueryPlan with out_of_scope=True and calls _route_after_planner.
+  Asserts exactly one Send is returned and its node is "responder" — out-of-
+  scope questions skip all QA agents and go straight to the refusal path.
+
+test_route_answer_from_state_goes_to_responder
+  Builds a QueryPlan with answer_from_state=True and calls _route_after_planner.
+  Asserts one Send to "responder" — broad market questions that can be answered
+  from existing state data do not fan out to any QA agent.
+
+test_route_no_plan_goes_to_responder
+  Passes a state where query_plan is None. Asserts one Send to "responder" —
+  a missing plan (e.g. if scope_guard reset it and planner failed silently)
+  is treated as answer-from-state to prevent a crash.
+
+test_route_asked_about_other_stock_fans_out_all_five
+  Builds a QueryPlan with asked_about_other_stock=True and other_ticker="MSFT".
+  Asserts exactly five Sends are returned, one for each of the five *_qa
+  nodes — cross-stock questions always fan out to all agents regardless of
+  relevant_agents.
+
+test_route_subset_agents_for_session_ticker
+  Builds a QueryPlan with relevant_agents=["fundamentals", "risk"] and
+  asked_about_other_stock=False. Asserts exactly two Sends: fundamentals_qa
+  and risk_qa — session-ticker questions respect the planner's agent selection.
+
+test_route_no_valid_agents_falls_back_to_responder
+  Builds a QueryPlan with relevant_agents=["nonexistent_agent"]. Asserts one
+  Send to "responder" — if the planner returns an unknown agent name, the
+  router falls back gracefully rather than crashing.
+
+test_route_asked_about_other_stock_ignores_relevant_agents_list
+  Builds a QueryPlan with asked_about_other_stock=True but relevant_agents=[].
+  Asserts five Sends — the empty relevant_agents list is ignored for other-
+  stock questions; all five agents always fan out.
+
+--- _resolve_ticker ---
+
+test_resolve_ticker_direct_symbol
+  Calls _resolve_ticker("AAPL") against the live yfinance API. Asserts "AAPL"
+  is returned unchanged — a valid ticker symbol resolves on the first attempt.
+
+test_resolve_ticker_falls_back_to_search
+  Calls _resolve_ticker("micron") against the live yfinance API. Asserts "MU"
+  is returned — a company name that fails direct ticker lookup is resolved via
+  yf.Search, preferring US-listed equities.
+
+test_resolve_ticker_raises_on_no_match
+  Calls _resolve_ticker("ZZZZNOTREAL") against the live yfinance API. Asserts
+  a ValueError is raised with "Could not find a valid ticker" — an input that
+  matches nothing in yfinance is rejected with a clear error message.
+
+
+────────────────────────────────────────────────────────────────────────────────
+FILE: tests/test_edge_cases.py  (13 tests)
+────────────────────────────────────────────────────────────────────────────────
+Tests boundary conditions and defensive code paths across _parse_signal,
+ticker_input_node, _resolve_ticker, and the cache bypass reset guarantee.
+All external calls are monkeypatched.
+
+--- _parse_signal ---
+
+test_parse_signal_strips_markdown_json_fence
+  Passes JSON wrapped in ```json ... ``` fences. Asserts _parse_signal
+  correctly strips the fence and parses the inner JSON — the LLM commonly
+  wraps output in code fences, which must not break parsing.
+
+test_parse_signal_strips_plain_code_fence
+  Passes JSON wrapped in plain ``` ... ``` fences (no language tag). Asserts
+  the fence is stripped and parsing succeeds — handles the variant where the
+  LLM omits the "json" language specifier.
+
+test_parse_signal_zero_bullets_raises
+  Passes a valid JSON object where "bullets" is an empty list. Asserts a
+  ValueError is raised with a message mentioning "0 bullets" — an agent that
+  returns no supporting evidence must fail loudly so the retry path activates.
+
+test_parse_signal_six_bullets_truncated_to_five
+  Passes a signal JSON with six bullet objects. Asserts the returned
+  AgentSignal has exactly five bullets — _parse_signal silently truncates
+  the list rather than raising, enforcing the 1–5 constraint at the parser
+  level before Pydantic validation.
+
+test_parse_signal_string_bullets_normalised_to_dicts
+  Passes a signal JSON where bullets is a list of plain strings rather than
+  dicts. Asserts each bullet is normalised to {"text": ..., "source": "",
+  "url": ""} — guards against LLMs that output bullet text directly without
+  wrapping it in the required object structure.
+
+test_parse_signal_malformed_json_raises
+  Passes a non-JSON string to _parse_signal. Asserts an exception is raised —
+  completely unparseable LLM output must propagate so the agent's retry or
+  fallback path can handle it.
+
+test_parse_signal_missing_bullets_key_raises
+  Passes valid JSON that is missing the "bullets" key entirely. Asserts a
+  KeyError or similar exception is raised — the parser must not silently
+  produce an empty signal when the required field is absent.
+
+--- ticker_input_node ---
+
+test_ticker_input_node_raises_value_error_on_invalid
+  Monkeypatches _resolve_ticker to raise ValueError. Calls ticker_input_node
+  with an invalid ticker. Asserts ValueError propagates — the node re-raises
+  ValueError unchanged so the FastAPI endpoint can map it to HTTP 422.
+
+test_ticker_input_node_wraps_unexpected_exception
+  Monkeypatches _resolve_ticker to raise RuntimeError. Asserts a ValueError
+  is raised with a message containing "Could not validate" — unexpected errors
+  (network timeouts, yfinance exceptions) are wrapped into ValueError so the
+  endpoint always gets a typed client error, never an untyped 500 from the
+  ticker validation layer.
+
+--- _resolve_ticker ---
+
+test_resolve_ticker_search_exception_falls_to_value_error
+  Monkeypatches yf.Ticker to return empty info and yf.Search to raise a
+  RuntimeError. Asserts _resolve_ticker raises ValueError — even if the search
+  API itself throws, the function catches and converts it to a user-facing
+  ValueError rather than leaking the internal exception type.
+
+test_resolve_ticker_non_equity_quotes_skipped_then_fallback
+  Monkeypatches yf.Search to return two quotes: one ETF (quoteType="ETF",
+  symbol="MU-ETF") then one EQUITY (quoteType="EQUITY", symbol="MU"). Asserts
+  "MU" is returned — the US-equity preference loop skips non-EQUITY entries
+  and correctly lands on the first matching equity with valid price data.
+
+--- Cache bypass reset on agent exception ---
+
+test_bypass_reset_even_when_fundamentals_qa_raises
+  Patches _run_tool_loop to raise RuntimeError inside fundamentals_qa_agent,
+  which has a needs_fresh_data=True plan (bypass is activated). Asserts
+  _bypass.get() is False after the agent returns — the try/finally block
+  in the agent guarantees bypass is reset even when the agent body raises,
+  preventing bypass from leaking into the next agent call on the same thread.
+
+test_bypass_reset_even_when_sentiment_qa_raises
+  Same pattern for sentiment_qa_agent — confirms the bypass reset guarantee
+  holds across all QA agents, not just fundamentals. A failure in one agent
+  must never leave the bypass ContextVar stuck at True for the next caller.
+
+
+────────────────────────────────────────────────────────────────────────────────
+FILE: tests/test_agents.py  (22 tests)
+────────────────────────────────────────────────────────────────────────────────
+Tests agent-level contracts: inputs, outputs, routing decisions, ticker
+selection, and cache bypass behaviour. All LLM calls and tool loops are
+mocked. A _base_state() helper builds a minimal valid GraphState dict.
+
+--- planner_agent ---
+
+test_planner_sets_asked_about_other_stock
+  Mocks _call_llm to return asked_about_other_stock=True, other_ticker="MSFT",
+  needs_fresh_data=True, and all 5 agents. Asserts the QueryPlan reflects
+  exactly those values — the planner correctly parses and forwards an
+  other-stock routing decision.
+
+test_planner_sets_out_of_scope_for_non_stock_question
+  Mocks _call_llm to return out_of_scope=True. Asserts the QueryPlan has
+  out_of_scope=True, asked_about_other_stock=False, and an empty
+  relevant_agents list — non-stock questions are marked for the refusal path.
+
+test_planner_fallback_plan_on_llm_error
+  Makes _call_llm raise an Exception. Asserts the result still contains a
+  valid QueryPlan with a list relevant_agents field — the planner's double
+  fallback (strict retry then hardcoded safe plan) prevents a crash even when
+  the LLM is completely unavailable.
+
+--- fundamentals_qa_agent ---
+
+test_fundamentals_qa_returns_agent_answer_shape
+  Mocks _run_tool_loop to return a JSON content string with answer, sources,
+  and confidence. Asserts result["agent_answers"]["fundamentals"] is an
+  AgentAnswer with a non-empty answer and confidence in [0, 1].
+
+test_fundamentals_qa_returns_fallback_on_error
+  Makes _run_tool_loop raise an Exception. Asserts agent_answers["fundamentals"]
+  is an AgentAnswer with confidence==0.0 — QA agents return a neutral fallback
+  rather than propagating exceptions.
+
+--- responder_agent ---
+
+test_responder_returns_answer
+  Mocks _call_llm to return a plain text answer. Passes a plan with
+  answer_from_state=True. Asserts result["answer"] is non-empty and
+  result["messages"] has exactly two entries (HumanMessage + AIMessage).
+
+test_responder_out_of_scope_no_llm_call
+  Passes a plan with out_of_scope=True. Asserts _call_llm was never called
+  and result["answer"] contains the word "stock" — the refusal path is
+  handled entirely without an LLM call.
+
+--- Analysis agents: signal key + neutral fallback (all 5) ---
+
+test_fundamentals_agent_returns_signal
+  Mocks _run_tool_loop to return a valid bullish signal JSON. Calls
+  fundamentals_agent. Asserts "fundamentals_signal" is in the result and
+  signal=="bullish" — the analysis path returns the correct state key.
+
+test_fundamentals_agent_returns_neutral_on_error
+  Makes _run_tool_loop raise. Asserts fundamentals_signal has signal=="neutral",
+  confidence==0.0, and a non-empty error field — the agent's outer except
+  block catches all failures and returns a safe neutral fallback.
+
+test_technical_agent_returns_signal_and_indicators
+  Mocks get_price_history.invoke, compute_indicators, and _call_llm. Asserts
+  the result contains both "technical_signal" (bullish) and
+  "technical_indicators" matching the mocked compute_indicators output —
+  the technical agent writes both keys to state.
+
+test_technical_agent_returns_neutral_on_error
+  Makes get_price_history.invoke raise. Asserts technical_signal has signal==
+  "neutral", confidence==0.0, and technical_indicators=={} — errors in the
+  data fetch leave both state keys in a clean safe state.
+
+test_sentiment_agent_returns_signal
+  Mocks _run_tool_loop to return a valid bullish signal JSON. Calls
+  sentiment_agent. Asserts "sentiment_signal" is in the result with
+  signal=="bullish".
+
+test_sentiment_agent_returns_neutral_on_error
+  Makes _run_tool_loop raise. Asserts sentiment_signal has signal=="neutral"
+  and confidence==0.0.
+
+test_macro_agent_returns_signal
+  Mocks _run_tool_loop and _get_sector_etf. Calls macro_agent. Asserts
+  "macro_signal" is in the result with signal=="bullish".
+
+test_macro_agent_returns_neutral_on_error
+  Makes _run_tool_loop raise (with _get_sector_etf mocked). Asserts
+  macro_signal has signal=="neutral" and confidence==0.0.
+
+test_risk_agent_returns_signal
+  Mocks _run_tool_loop to return a valid bullish signal JSON. Calls
+  risk_agent. Asserts "risk_signal" is in the result with signal=="bullish".
+
+test_risk_agent_returns_neutral_on_error
+  Makes _run_tool_loop raise. Asserts risk_signal has signal=="neutral"
+  and confidence==0.0.
+
+--- technical_qa_agent ---
+
+test_technical_qa_sets_bypass_for_other_stock
+  Replaces _call_llm with a side-effect that captures _bypass.get() at call
+  time. Passes an asked_about_other_stock=True plan. Asserts bypass was True
+  during the call — the bypass ContextVar must be active when fetching data
+  for another ticker.
+
+test_technical_qa_returns_fallback_on_error
+  Makes get_price_history.invoke raise. Passes a needs_fresh_data=True plan
+  so a fresh fetch is attempted. Asserts agent_answers["technical"].confidence
+  == 0.0 — the agent returns a neutral fallback rather than propagating the
+  fetch error.
+
+--- sentiment_qa_agent ---
+
+test_sentiment_qa_returns_fallback_on_error
+  Makes _run_tool_loop raise. Asserts agent_answers["sentiment"].confidence
+  == 0.0.
+
+--- macro_qa_agent ---
+
+test_macro_qa_returns_fallback_on_error
+  Makes _run_tool_loop raise. Asserts agent_answers["macro"].confidence==0.0.
+
+--- risk_qa_agent ---
+
+test_risk_qa_returns_fallback_on_error
+  Makes _run_tool_loop raise. Asserts agent_answers["risk"].confidence==0.0.
+
+
+────────────────────────────────────────────────────────────────────────────────
+FILE: tests/test_tools.py  (9 tests)
+────────────────────────────────────────────────────────────────────────────────
+Live API calls against real data sources — no mocks. Each test verifies that
+the required response fields are present and "error" is absent. An autouse
+fixture calls clear_cache() before and after every test so each call hits the
+live API rather than the in-memory cache.
+
+test_get_fundamentals_returns_required_fields
+  Calls get_fundamentals("AAPL"). Asserts "error" not in result and checks
+  that trailingPE, forwardPE, sector, industry, marketCap, profitMargins,
+  returnOnEquity, and debtToEquity are all present.
+
+test_get_financials_returns_all_statement_keys
+  Calls get_financials("AAPL"). Asserts "error" not in result and that the
+  result has exactly the six keys: income_statement, balance_sheet, cash_flow,
+  quarterly_income_statement, quarterly_balance_sheet, quarterly_cash_flow.
+
+test_get_price_history_returns_ohlcv_and_52w_levels
+  Calls get_price_history("AAPL"). Asserts "error" not in result, that
+  ohlcv contains all five OHLCV columns, that 52w_high and 52w_low are
+  present, and that 52w_high >= 52w_low.
+
+test_compute_indicators_returns_all_keys
+  Calls get_price_history("AAPL") for real data, then passes the result to
+  compute_indicators(). Asserts "error" not in result and that exactly the
+  14 expected keys are present: current_price, rsi_14, macd_signal,
+  bb_position, ma50, ma200, price_vs_ma50, price_vs_ma200, volume_trend,
+  atr_14, support, resistance, recent_swing_low, recent_swing_high.
+
+test_get_macro_indicators_returns_required_fields
+  Calls get_macro_indicators() against the live FRED API. Asserts "error"
+  not in result and that fed_funds_rate, cpi, cpi_yoy_pct, treasury_10y,
+  usd_index, and unemployment_rate are all present.
+
+test_get_sector_performance_returns_required_fields
+  Calls get_sector_performance("XLK"). Asserts "error" not in result,
+  result["sector_etf"] == "XLK", and that etf_6m_return_pct,
+  spy_6m_return_pct, and relative_performance_pct are all present.
+
+test_get_news_sentiment_returns_required_fields
+  Calls get_news_sentiment("AAPL") against the live Alpha Vantage API.
+  Asserts "error" not in result and that overall_sentiment_label,
+  overall_sentiment_score, article_count, bullish_pct, bearish_pct,
+  neutral_pct, sample_headlines, and topics are all present. Also asserts
+  overall_sentiment_label is one of the five known Alpha Vantage labels.
+
+test_compute_risk_metrics_returns_required_fields
+  Calls compute_risk_metrics("AAPL"). Asserts "error" not in result, that
+  exactly the 5 keys are present (beta, annualised_volatility, var_95_daily,
+  max_drawdown, sharpe_ratio), max_drawdown <= 0, and
+  annualised_volatility > 0.
+
+test_get_insider_short_data_returns_required_fields
+  Calls get_insider_short_data("AAPL"). Asserts "error" not in result and
+  that short_percent_of_float, insider_buys_90d, insider_sells_90d, and
+  next_earnings_date are all present. Also asserts buy/sell counts are ints.
+
+
+────────────────────────────────────────────────────────────────────────────────
+FILE: tests/test_api.py  (13 tests)
+────────────────────────────────────────────────────────────────────────────────
+Tests the FastAPI endpoints /analyse and /qa via TestClient (ASGI test
+transport — no real network). The graph's ainvoke method is patched with
+AsyncMock to return pre-built mock state dicts. All tests share a
+module-scoped TestClient to avoid rebuilding the app per test.
+
+--- /analyse endpoint ---
+
+test_analyse_valid_ticker_returns_200
+  Patches graph.ainvoke to return _MOCK_ANALYSE_RESULT. Posts {"ticker":
+  "AAPL", "thread_id": "..."} to /analyse. Asserts HTTP 200 — the happy
+  path succeeds with a valid ticker and a working graph.
+
+test_analyse_response_has_required_fields
+  Same patch. Posts to /analyse and inspects the JSON body. Asserts all of
+  ticker, recommendation, score, summary, report are present — the endpoint
+  serialises and exposes all five required fields from _ANALYSIS_FIELDS.
+
+test_analyse_recommendation_is_valid
+  Same patch. Asserts response["recommendation"] is one of "BUY", "HOLD",
+  "SELL" — the recommendation field is never None or an unexpected value.
+
+test_analyse_invalid_ticker_returns_422
+  Patches _resolve_ticker to raise ValueError. Posts an invalid ticker.
+  Asserts HTTP 422 — ticker validation failure is surfaced as a client error,
+  not a server error.
+
+test_analyse_internal_error_returns_500
+  Patches graph.ainvoke to raise RuntimeError. Posts a valid ticker. Asserts
+  HTTP 500 — unexpected graph exceptions are caught and returned as server
+  errors without crashing the FastAPI process.
+
+test_analyse_signals_serialised_as_dicts
+  Same patch as happy path. Asserts response["fundamentals_signal"] is a dict
+  with "signal", "confidence", and "bullets" keys — Pydantic AgentSignal
+  objects are serialised correctly to JSON-friendly dicts by the endpoint.
+
+test_analyse_excludes_internal_fields
+  Same patch. Asserts none of messages, agent_answers, prior_analyses,
+  technical_indicators appear in the response body — internal state fields
+  are filtered out by _ANALYSIS_FIELDS and must never leak to the frontend.
+
+--- /qa endpoint ---
+
+test_qa_returns_200
+  Patches graph.ainvoke to return _MOCK_QA_RESULT. Posts {"ticker":"AAPL",
+  "question":"...", "thread_id":"..."} to /qa. Asserts HTTP 200.
+
+test_qa_response_has_answer_and_routed_to
+  Same patch. Asserts response body contains "answer" (string) and
+  "routed_to" (list) — the QAResponse schema is honoured.
+
+test_qa_routed_to_reflects_plan_agents
+  Patches graph.ainvoke to return a plan with relevant_agents=["fundamentals"].
+  Asserts response["routed_to"]==["fundamentals"] — the endpoint reads
+  plan.relevant_agents from state and forwards it to the caller so the
+  frontend can display which agents were consulted.
+
+test_qa_other_stock_routes_to_all_five
+  Patches graph.ainvoke to return _MOCK_OTHER_STOCK_QA_RESULT where the plan
+  has all five agents. Asserts len(response["routed_to"])==5 — cross-stock
+  questions fan out to all five agents and that is reflected in routed_to.
+
+test_qa_out_of_scope_returns_answer_not_error
+  Patches graph.ainvoke to return _MOCK_OUT_OF_SCOPE_QA_RESULT. Asserts
+  HTTP 200 (not 500), a non-empty answer, and routed_to==[] — out-of-scope
+  refusals are a normal, graceful outcome from the API's perspective, not an
+  error condition.
+
+test_qa_graph_error_returns_500
+  Patches graph.ainvoke to raise RuntimeError. Asserts HTTP 500 — unexpected
+  exceptions during the Q&A graph invocation are caught and returned as
+  server errors.
+
+
+================================================================================
+END OF DESCRIPTIONS
+================================================================================

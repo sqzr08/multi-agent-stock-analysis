@@ -1,0 +1,28 @@
+# Secrets
+.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.Python
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# Local data / generated files
+stock_analyser/memory/*.db
+
+# Pytest
+.pytest_cache/
+
+# OS / editor
+.DS_Store
+.vscode/
+
+# Local project files
+Stock Analysis.code-workspace
+CLAUDE.md
+SETUP.md

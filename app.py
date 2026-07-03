@@ -35,7 +35,7 @@ with st.sidebar:
     st.title("📈 Multi-Agent Stock Analyser")
     st.markdown("---")
     st.markdown(
-        "A multi-agent system that analyses a stock across **6 dimensions** in parallel:\n\n"
+        "A multi-agent system that analyses a stock across **5 dimensions** in parallel:\n\n"
         "- 📊 **Fundamentals** — valuation & financials\n"
         "- 📉 **Technical** — price trends & indicators\n"
         "- 📰 **Sentiment** — news & market mood\n"

@@ -10,11 +10,9 @@
 ## 1. Get the Code
 
 ```bash
-git clone <repo-url>
-cd "Stock Analysis"
+git clone https://github.com/sqzr08/multi-agent-stock-analysis.git
+cd multi-agent-stock-analysis
 ```
-
-Or if you have the folder already, just `cd` into it.
 
 ---
 
@@ -126,17 +124,3 @@ python3 -m pytest tests/ -v
 67 tests total. Most use mocks and run instantly. `test_tools.py` makes live API calls (yfinance, FRED, Alpha Vantage) and requires valid keys and a network connection.
 
 ---
-
-## Troubleshooting
-
-**Alpha Vantage returns `{"Information": "..."}` instead of news data**
-The free tier allows 25 requests per day. The sentiment agent will fall back to a neutral signal — other agents are unaffected. Upgrade to a paid plan or wait until the next day.
-
-**`KeyError: 'GOOGLE_API_KEY'` (or FRED / Alpha Vantage)**
-The `.env` file is missing or in the wrong location. It must be at the project root (the same folder as `api.py`, not inside `stock_analyser/`).
-
-**FRED API SSL error on macOS**
-The code already applies a fix at module level in `fred_tools.py` using `certifi`. If you still see SSL errors, ensure `certifi` is installed (`pip show certifi`) and that you are using the virtual environment's Python, not a system Python.
-
-**`ValueError: Could not find a valid ticker for '...'`**
-The ticker wasn't recognised by yfinance. Try the exact ticker symbol (e.g. `MU` instead of `Micron`), or check that the symbol is listed on a US exchange.

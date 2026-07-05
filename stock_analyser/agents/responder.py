@@ -60,9 +60,6 @@ def _build_context(state: GraphState) -> str:
         f"(score: {state.get('score', 'N/A')})",
     ]
 
-    if plan and plan.asked_about_other_stock and plan.other_ticker:
-        lines.append(f"\n[Agent findings below are for {plan.other_ticker}, NOT {session_ticker}]")
-
     for field, label in [
         ("fundamentals_signal", "Fundamentals"),
         ("technical_signal", "Technical"),
@@ -78,6 +75,8 @@ def _build_context(state: GraphState) -> str:
     agent_answers = state.get("agent_answers") or {}
     if agent_answers:
         answer_ticker = (plan.other_ticker if plan and plan.asked_about_other_stock else session_ticker)
+        if plan and plan.asked_about_other_stock and plan.other_ticker:
+            lines.append(f"\n[Agent findings below are for {plan.other_ticker}, NOT {session_ticker}]")
         lines.append(f"\nAgent findings for {answer_ticker}:")
         for agent_name, answer_obj in agent_answers.items():
             if hasattr(answer_obj, "answer"):

@@ -4,6 +4,7 @@
 
 - **Python 3.14+** (the project was built and tested on 3.14; a module-level SSL patch in `fred_tools.py` is required for the FRED API on macOS Python 3.14)
 - No other system-level dependencies
+- Alternatively, **Docker** — see [Option C — Docker](#option-c--docker) below, which needs no local Python install at all
 
 ---
 
@@ -90,6 +91,37 @@ python3 -m stock_analyser.main
 ```
 
 You'll be prompted for a ticker. After the report prints, a Q&A loop starts — type questions or press Enter / `exit` to quit.
+
+---
+
+### Option C — Docker
+
+Requires [Docker Desktop](https://www.docker.com/products/docker-desktop/) (or another Docker Compose–compatible engine). No local Python install or virtual environment needed — steps 2–3 above are skipped entirely.
+
+Make sure your `.env` file (step 4) exists at the project root, then run:
+
+```bash
+docker compose up --build
+```
+
+This builds one shared image and starts two containers:
+
+| Service | Port | Notes |
+|---|---|---|
+| `api` | `8000` | FastAPI backend, owns the LangGraph + MemorySaver |
+| `web` | `8501` | Streamlit frontend, talks to `api` over the compose network |
+
+Open [http://localhost:8501](http://localhost:8501) in your browser. Long-term memory (`analyses.db`) persists across restarts in a named volume (`memory-db`), so analysis history survives `docker compose down`.
+
+Stop the stack with:
+```bash
+docker compose down
+```
+
+Add `-v` to also delete the persisted SQLite volume:
+```bash
+docker compose down -v
+```
 
 ---
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import uuid
 
 import httpx
@@ -7,7 +8,7 @@ import streamlit as st
 
 from stock_analyser.state import AgentSignal, MarketReport
 
-API_BASE = "http://localhost:8000"
+API_BASE = os.environ.get("API_BASE", "http://localhost:8000")
 _SIGNAL_KEYS = [
     "fundamentals_signal", "technical_signal", "sentiment_signal",
     "macro_signal", "risk_signal",
